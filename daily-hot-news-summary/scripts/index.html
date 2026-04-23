@@ -1,0 +1,100 @@
+
+### 2. scripts/index.html（JS逻辑入口文件）
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Daily Hot News Summary</title>
+</head>
+<body>
+    <script>
+        // 全局入口函数，严格遵循官方规范
+        window['ai_edge_gallery_get_result'] = async (data, secret) => {
+            try {
+                // 1. 解析入参，设置默认值
+                const inputData = JSON.parse(data || '{}');
+                const { 
+                    newsCount = 5, 
+                    language = 'zh', 
+                    country = 'cn' 
+                } = inputData;
+
+                // 2. 校验API密钥
+                if (!secret || secret.trim() === '') {
+                    return JSON.stringify({
+                        error: '未获取到有效的NewsAPI密钥，请检查你输入的API Key是否正确'
+                    });
+                }
+
+                // 3. 配置资讯领域映射（适配NewsAPI官方分类）
+                const categoryMap = [
+                    { key: 'technology', name: '科技' },
+                    { key: 'business', name: '财经' },
+                    { key: 'entertainment', name: '文娱' },
+                    { key: 'sports', name: '体育' },
+                    { key: 'general', name: '国际' }
+                ];
+
+                // 4. 处理今日日期（适配中国时区UTC+8，避免日期偏移）
+                const today = new Date();
+                const offset = 8 * 60 * 60 * 1000;
+                const localToday = new Date(today.getTime() + offset);
+                const todayStr = localToday.toISOString().split('T')[0];
+
+                // 5. 并行请求各领域资讯
+                const fetchNewsPromises = categoryMap.map(async (category) => {
+                    const apiUrl = new URL('https://newsapi.org/v2/top-headlines');
+                    apiUrl.searchParams.append('country', country);
+                    apiUrl.searchParams.append('category', category.key);
+                    apiUrl.searchParams.append('language', language);
+                    apiUrl.searchParams.append('from', todayStr);
+                    apiUrl.searchParams.append('to', todayStr);
+                    apiUrl.searchParams.append('sortBy', 'popularity');
+                    apiUrl.searchParams.append('pageSize', newsCount);
+                    apiUrl.searchParams.append('apiKey', secret);
+
+                    const response = await fetch(apiUrl.href);
+                    if (!response.ok) {
+                        throw new Error(`${category.name}领域资讯请求失败：${response.status} ${response.statusText}`);
+                    }
+                    const result = await response.json();
+                    return {
+                        category: category.name,
+                        newsList: result.articles || []
+                    };
+                });
+
+                // 6. 处理请求结果，过滤无效数据
+                const newsResult = await Promise.allSettled(fetchNewsPromises);
+                const finalNewsData = newsResult.map((item, index) => {
+                    const categoryInfo = categoryMap[index];
+                    if (item.status === 'rejected') {
+                        return {
+                            category: categoryInfo.name,
+                            newsList: [],
+                            error: item.reason.message
+                        };
+                    }
+                    return item.value;
+                });
+
+                // 7. 返回结构化数据给LLM
+                return JSON.stringify({
+                    result: {
+                        generateDate: todayStr,
+                        generateTime: localToday.toISOString().replace('T', ' ').split('.')[0],
+                        newsData: finalNewsData
+                    }
+                });
+
+            } catch (e) {
+                console.error('资讯获取失败：', e);
+                return JSON.stringify({
+                    error: `资讯汇总失败：${e.message}`
+                });
+            }
+        };
+    </script>
+</body>
+</html>
